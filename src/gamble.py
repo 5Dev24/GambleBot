@@ -21,7 +21,7 @@ class GambleBot(discord.Client):
 
 		guilds: List[discord.Guild] = self.guilds
 
-		longest_name = max(guilds, key = lambda guild: guild.name.__len__()).name.__len__()
+		longest_name = max(guilds, key = lambda guild: guild.name.__len__()).name.__len__() + 2
 		most_members = max(guilds, key = lambda guild: guild.member_count).member_count.__str__().__len__()
 
 		print("I'm in the following guilds:")
@@ -30,7 +30,8 @@ class GambleBot(discord.Client):
 			if invite.__len__(): invite = invite[0].url
 			else: invite = "No invites"
 
-			print(f'\t{guild.id}: "{guild.name:<{longest_name}}" ({guild.member_count:>{most_members}} member{"" if guild.member_count == 1 else "s"}): {invite}')
+			name = f'"{guild.name}"'
+			print(f'\t{guild.id}: {name:<{longest_name}} ({guild.member_count:>{most_members}} member{"" if guild.member_count == 1 else "s"}): {invite}')
 
 		if not guilds.__len__():
 			print("\tNone ):")
