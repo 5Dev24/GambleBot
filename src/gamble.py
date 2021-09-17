@@ -2,6 +2,7 @@ from typing import List
 import commands
 import discord
 import data
+import log
 
 class GambleBot(discord.Client):
 
@@ -10,6 +11,8 @@ class GambleBot(discord.Client):
 
 		self.user_locker = data.Locker()
 		self.guild_locker = data.Locker()
+		self.logger = log.LogHandler()
+
 		self.data = data.DataHandler(self)
 		self.command_handler = commands.CommandHandler(self)
 

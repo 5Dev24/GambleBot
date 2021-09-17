@@ -44,7 +44,7 @@ class Cached(TypedDict):
 
 class DataHandler:
 
-	_project_root: str = None # Set at runtime in __main__
+	_data_root: str = None # Set at runtime in __main__
 
 	def __init__(self, parent: "gamble.GambleBot"):
 		self.parent = parent
@@ -56,7 +56,7 @@ class DataHandler:
 	def __modify(self, object_id: int, object_type: str, data: Dict[str, Any]) -> bool:
 		"""A data RLock is assumed to already be acquired"""
 		try:
-			object_file = os.path.join(DataHandler._project_root, "data", object_type, f"{object_id}.json")
+			object_file = os.path.join(DataHandler._data_root, object_type, f"{object_id}.json")
 
 			write_lock = fasteners.InterProcessReaderWriterLock(object_file)
 
@@ -77,7 +77,7 @@ class DataHandler:
 	def __read(self, object_id: int, object_type: str) -> Dict[str, Any]:
 		"""A data RLock is assumed to already be acquired"""
 		try:
-			object_file = os.path.join(DataHandler._project_root, "data", object_type, f"{object_id}.json")
+			object_file = os.path.join(DataHandler._data_root, object_type, f"{object_id}.json")
 
 			read_lock = fasteners.InterProcessReaderWriterLock(object_file)
 
@@ -96,7 +96,7 @@ class DataHandler:
 
 	def __exists(self, object_id: int, object_type: str) -> bool:
 		"""A data RLock is assumed to already be acquired"""
-		return os.path.isfile(os.path.join(DataHandler._project_root, "data", object_type, f"{object_id}.json"))
+		return os.path.isfile(os.path.join(DataHandler._data_root, object_type, f"{object_id}.json"))
 
 	def modify_user(self, user_id: int, data: UserDataType) -> bool:
 		with self.parent.user_locker.lock(user_id):
@@ -145,38 +145,3 @@ class DataHandler:
 			default = _default_guild_data()
 			self._cache["guilds"][guild_id] = Cached(data = default, last_access = int(time.time()))
 			return default
-
-"""
-	CSV Method
-		- Isn't good because if data fields (names) are changed, breaks and having to migrate seems awful
-		- Would give smaller data files
-
-	Cache method? idk
-
-	def modify_user(self, user_id: int, data: UserDataType) -> bool:
-		try:
-			with self.parent.user_lockers.user_lock(user_id):
-				with open(os.path.join(UserDataHandler._project_root, "data", "users", f"{user_id}.csv"), "w", newline = "") as user_file:
-					csv.writer(user_file, "unix").writerow(data.values().__iter__())
-
-					# Remove extra \n
-					user_file.seek(user_file.tell() - 1, os.SEEK_SET)
-					user_file.truncate()
-
-					return True
-
-		except IOError:
-			return False
-
-	def read_user(self, user_id: int) -> UserDataType:
-		with self.parent.user_lockers.user_lock(user_id):
-			with open(os.path.join(UserDataHandler._project_root, "data", "users", f"{user_id}.csv"), "r", newline = "") as user_file:
-				return {
-					key: value_cast(value)
-					for key, value, value_cast in zip(
-						UserDataType.__annotations__.keys(),
-						csv.reader(user_file, "unix").__next__(),
-						UserDataType.__annotations__.values()
-					)
-				}
-"""

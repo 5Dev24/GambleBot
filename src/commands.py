@@ -1,4 +1,6 @@
 from typing import TypedDict, Optional, Tuple, Dict, List
+from collections import defaultdict
+from threading import RLock
 import datetime
 import discord
 import asyncio
@@ -361,10 +363,17 @@ class Pay(Command):
 						sender_data["bal"] -= amount_to_pay
 						recipient_data["bal"] += amount_to_pay
 
-						flag1 = self.parent.data.modify_user(author.id, sender_data)
-						flag2 = self.parent.data.modify_user(recipient_id, recipient_data)
+						flag1 = not self.parent.data.modify_user(author.id, sender_data)
+						flag2 = not self.parent.data.modify_user(recipient_id, recipient_data)
 
-						# TODO: Finish
+						if flag1 and flag2:
+							return await self.parent.send_message(message, "Error", "Failed to save both user's data", discord.Color.red(), True)
+						elif flag1:
+							return await self.parent.send_message(message, "Error", "Failed to save sender's data", discord.Color.red(), True)
+						elif flag2:
+							return await self.parent.send_message(message, "Error", "Failed to save recipient's data", discord.Color.red(), True)
+
+					return await self.parent.send_message_w_fields(message, "Payment complete", f"{amount_to_pay} credit{'' if amount_to_pay == 1 else 's'} has been sent", discord.Color.gold())
 
 				except ValueError:
 					return await self.parent.send_message_w_fields(message, "Invalid user", "Use pay <@user> <amount>", discord.Color.red(), "Invalid argument @user", "Try mentioning a user")
@@ -389,6 +398,7 @@ class CommandHandler:
 			"roll": Roll(parent),
 			"slots": Slots(parent),
 			"fslots": FastSlots(parent),
+			"pay": Pay(parent),
 			"daily": Daily(parent),
 			"help": Help(parent)
 		}
@@ -412,29 +422,38 @@ class CommandHandler:
 				self._help_fields.append(cmd_name)
 				self._help_fields.append(help_msg)
 
+		self.rate_limit_locks: Dict[int, RLock] = defaultdict(RLock)
 		self.rate_limit: Dict[int, int] = {}
 
 	@property
 	def next_rate_limit(self) -> int:
-		return int(time.time() + 5)
+		return int(time.time() + 2)
 
 	async def receive(self, cmd: str, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild] = None) -> None:
-		allow = False
+		acquired = False
+		try:
+			acquired = self.rate_limit_locks[author.id].acquire(False)
 
-		if author.id not in self.rate_limit:
-			self.rate_limit[author.id] = self.next_rate_limit
-			allow = True
-		elif self.rate_limit[author.id] <= int(time.time()):
-			allow = True
+			if acquired:
+				allow = False
 
-		if allow:
-			if cmd in self.cmds:
-				await self.cmds[cmd](args, message, author, guild)
-				return # Don't want to return the output from the command as it's sometimes non-None
+				if author.id not in self.rate_limit:
+					self.rate_limit[author.id] = self.next_rate_limit
+					allow = True
+				elif self.rate_limit[author.id] <= int(time.time()):
+					allow = True
 
-			prefix = "g!" if guild is None else self.parent.data.read_guild(guild.id)["cmd_prefix"]
+				if allow:
+					if cmd in self.cmds:
+						await self.cmds[cmd](args, message, author, guild)
+						return # Don't want to return the output from the command as it's sometimes non-None
 
-			await self.parent.send_message(message, "Invalid command", f'No command called "{cmd}" exists, try using {prefix}help', discord.Color.red(), True)
-			return
+					prefix = "g!" if guild is None else self.parent.data.read_guild(guild.id)["cmd_prefix"]
 
-		await self.parent.send_message(message, "Rate Limit", "You're being rate limited, try again in a few seconds", discord.Color.dark_purple(), True)
+					await self.parent.send_message(message, "Invalid command", f'No command called "{cmd}" exists, try using {prefix}help', discord.Color.red(), True)
+					return
+
+			await self.parent.send_message(message, "Rate Limit", "You're being rate limited, try again in a few seconds", discord.Color.dark_purple(), True)
+		finally:
+			if acquired:
+				self.rate_limit_locks[author.id].release()
