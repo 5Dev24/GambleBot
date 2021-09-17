@@ -8,7 +8,8 @@ class GambleBot(discord.Client):
 	def __init__(self):
 		super().__init__(intents = discord.Intents(messages = True, members = True, guilds = True))
 
-		self.lockers = data.Locker()
+		self.user_locker = data.Locker()
+		self.guild_locker = data.Locker()
 		self.data = data.DataHandler(self)
 		self.command_handler = commands.CommandHandler(self)
 
