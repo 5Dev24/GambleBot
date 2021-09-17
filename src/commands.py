@@ -165,22 +165,40 @@ class SlotsManager:
 
 class SlotMachine:
 
-	def __init__(self, parent: "gamble.GambleBot", bet: int):
+	def __init__(self, parent: "gamble.GambleBot", bet: int, rows: int = 10):
 		self.parent = parent
-		self.slots: List[List[SlotElement]] = [[parent.command_handler.slots_manager.random_slot() for _ in range(3)] for _ in range(12)]
+		self.slots: List[List[SlotElement]] = []
+		self.win = False
+		rows = rows if 3 <= rows <= 15 else 10
+
+		for row in range(rows):
+			if row == rows - 2 and random.random() < .45:
+				self.win = True
+				self.slots.append([parent.command_handler.slots_manager.random_slot()] * 3)
+				continue
+
+			slots = [parent.command_handler.slots_manager.random_slot(), parent.command_handler.slots_manager.random_slot(), parent.command_handler.slots_manager.random_slot()]
+
+			while slots[0]["emote"] == slots[1]["emote"] == slots[2]["emote"]:
+				slots = [parent.command_handler.slots_manager.random_slot(), parent.command_handler.slots_manager.random_slot(), parent.command_handler.slots_manager.random_slot()]
+
+			self.slots.append(slots)
+
 		self.slot_message: discord.Message = None
 		self.bet = bet
 
 	def new_row(self):
-		self.slots[0:3] = self.slots[1:4]
-		self.slots[4:] = self.slots[5:-1]
+		for i in range(self.slots.__len__() - 1):
+			self.slots[i] = self.slots[i + 1]
+
+		del self.slots[i + 1]
 
 	async def payout(self, message: discord.Message, author: discord.User):
 		if self.slots[1][0]["emote"] == self.slots[1][1]["emote"] == self.slots[1][2]["emote"]:
 			win_amount = int(self.bet * (1 + self.slots[1][0]["multiplier"]))
 
 			await self.slot_message.edit(content = None, embed = discord.Embed(title = "Slot Machine", description = 
-				f'= :{self.slots[1][0]["emote"]}: :{self.slots[1][1]["emote"]}: :{self.slots[1][2]}: =', color = discord.Color.gold())
+				f'**=** :{self.slots[1][0]["emote"]}: :{self.slots[1][1]["emote"]}: :{self.slots[1][2]["emote"]}: **=**', color = discord.Color.gold())
 				.add_field(name = "You won!", value = f"You got {win_amount} credit{'' if win_amount == 1 else 's'}"),
 				allowed_mentions = self.parent.command_handler.mentions)
 
@@ -188,6 +206,7 @@ class SlotMachine:
 			user_data["bal"] += win_amount
 			if not self.parent.data.modify_user(author.id, user_data):
 				await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
+			return
 
 		await self.slot_message.edit(content = None, embed = discord.Embed(title = "Slot Machine", description =
 			f'= :{self.slots[1][0]["emote"]}: :{self.slots[1][1]["emote"]}: :{self.slots[1][2]["emote"]}: =',
@@ -195,17 +214,19 @@ class SlotMachine:
 
 	async def roll(self, message: discord.Message):
 		async def do_a_barrel_roll():
-			await asyncio.sleep(0.5)
+			await asyncio.sleep(1)
 			self.new_row()
 			await self.slot_message.edit(content = self.__str__(), allowed_mentions = self.parent.command_handler.mentions)
 
 		self.slot_message = await self.parent.send_raw_message(message, self.__str__())
-		for _ in range(9):
+		for _ in range(self.slots.__len__() - 3):
 			await do_a_barrel_roll()
+
+		await asyncio.sleep(1)
 
 	def __str__(self) -> str:
 		return f'''** **   :{self.slots[0][0]["emote"]}: :{self.slots[0][1]["emote"]}: :{self.slots[0][2]["emote"]}:
-= :{self.slots[1][0]["emote"]}: :{self.slots[1][1]["emote"]}: :{self.slots[1][2]["emote"]}: =
+{"**=**" if self.win else "="} :{self.slots[1][0]["emote"]}: :{self.slots[1][1]["emote"]}: :{self.slots[1][2]["emote"]}: {"**=**" if self.win else "="}
     :{self.slots[2][0]["emote"]}: :{self.slots[2][1]["emote"]}: :{self.slots[2][2]["emote"]}:'''
 
 class Slots(Command):
@@ -229,6 +250,15 @@ class Slots(Command):
 			if bet > 2500:
 				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet cannot be greater than 2500 credits")
 
+			user_data = self.parent.data.read_user(author.id)
+
+			if user_data["bal"] < bet:
+				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "You don't have enough credits to make that bet")
+
+			user_data["bal"] -= bet
+			if not self.parent.data.modify_user(author.id, user_data):
+				return await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
+
 			machine = SlotMachine(self.parent, bet)
 			await machine.roll(message)
 			return await machine.payout(message, author)
@@ -239,7 +269,50 @@ class Slots(Command):
 		return "<bet>"
 
 	def __help__(self) -> str:
-		return "Spin 3 wheels"
+		return "Spin the wheel"
+
+class FastSlots(Command):
+
+	async def __call__(self, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild]) -> None:
+		if args.__len__():
+			bet = args[0]
+
+			try:
+				bet = int(bet)
+
+			except ValueError:
+				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Try specifying a positive integer")
+
+			if bet < 0:
+				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be positive")
+
+			if bet < 20:
+				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be at least 20 credits")
+
+			if bet > 2500:
+				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet cannot be greater than 2500 credits")
+
+			user_data = self.parent.data.read_user(author.id)
+
+			if user_data["bal"] < bet:
+				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "You don't have enough credits to make that bet")
+
+			user_data["bal"] -= bet
+			if not self.parent.data.modify_user(author.id, user_data):
+				return await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
+
+			machine = SlotMachine(self.parent, bet, 3)
+			await machine.roll(message)
+			return await machine.payout(message, author)
+
+		await self.parent.send_message_w_fields(message, "Invalid usage", "Use fslots <bet>", discord.Color.red(), "Missing argument", "You need to specify a bet")
+
+	def __args__(self) -> str:
+		return "<bet>"
+
+	def __help__(self) -> str:
+		return "Spin the wheel quickly"
+
 
 class CommandHandler:
 
@@ -252,6 +325,7 @@ class CommandHandler:
 			"bal": Bal(parent),
 			"roll": Roll(parent),
 			"slots": Slots(parent),
+			"fslots": FastSlots(parent),
 			"daily": Daily(parent),
 			"help": Help(parent)
 		}
