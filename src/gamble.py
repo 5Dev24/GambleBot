@@ -79,7 +79,7 @@ class GambleBot(discord.Client):
 		cmd = content[0].lower()
 		args = content[1:]
 
-		guild_data: data.GuildDataType = data._default_guild_data() if message.guild is None else self.data.read_guild(message.guild.id)
+		guild_data: data.GuildDataType = data._default_guild_data() if message.guild is None else await self.data.read_guild(message.guild.id)
 
 		if guild_data["cmd_channel"] != -1 and guild_data["cmd_channel"] != message.channel.id:
 			return # Not correct channel

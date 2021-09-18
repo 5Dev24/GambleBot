@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-from posixpath import expanduser
-from discord import user
 from discord.ext import tasks
 from pathlib import Path
 import asyncio
@@ -38,17 +36,12 @@ def main():
 			for cache_name in list(bot.data._cache.keys()):
 				for object_id in list(bot.data._cache[cache_name].keys()):
 					if bot.data._cache[cache_name][object_id]["last_access"] + purge_time < now:
-						print("Purging", object_id, "from", cache_name, "cache")
 						del bot.data._cache[cache_name][object_id]
 
 			for user_id in list(bot.command_handler.rate_limit.keys()):
-				if bot.command_handler.rate_limit[user_id] + purge_time < now:
-					print("Purging", user_id, "from rate limit cache")
-					try:
-						del bot.command_handler.rate_limit[user_id]
-						del bot.command_handler.rate_limit_locks[user_id]
-					except KeyError:
-						pass
+				if bot.command_handler.rate_limit[user_id] + purge_time < now and not bot.command_handler.rate_limit_locks[user_id].locked():
+					del bot.command_handler.rate_limit[user_id]
+					del bot.command_handler.rate_limit_locks[user_id]
 
 			await asyncio.sleep(wait_time)
 

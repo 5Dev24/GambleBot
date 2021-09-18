@@ -1,6 +1,5 @@
 from typing import TypedDict, Optional, Tuple, Dict, List
 from collections import defaultdict
-from threading import RLock
 import datetime
 import discord
 import asyncio
@@ -27,33 +26,37 @@ class Bal(Command):
 
 	async def __call__(self, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild]) -> None:
 		if args.__len__():
-			user_id = args[0]
-			if user_id.startswith("<@") and user_id.endswith(">"):
-				user_id = user_id[2:-1]
-				if user_id.startswith("!"):
-					user_id = user_id[1:]
+			target_id = args[0]
+			if target_id.startswith("<@") and target_id.endswith(">"):
+				target_id = target_id[2:-1]
+				if target_id.startswith("!"):
+					target_id = target_id[1:]
 
 				try:
-					user_id	= int(user_id)
+					target_id = int(target_id)
 
-					if user_id == author.id:
-						bal = self.parent.data.read_user(author.id)["bal"]
+					if target_id == author.id:
+						bal = (await self.parent.data.read_user(author.id))["bal"]
 						await self.parent.send_message(message, "Your balance is", f"{bal} credit{'' if bal == 1 else 's'}", discord.Color.gold())
 						return
 
-					bal = self.parent.data.read_user(user_id)['bal']
-					await self.parent.send_message(message, "Their balance is", f"{bal} credit{'' if bal == 1 else 's'}", discord.Color.gold())
-					return
+					target: discord.User = self.parent.get_user(target_id)
+
+					if target is None:
+						await self.parent.send_message(message, "Can't find user", f"Can't find a user by the id {target_id}", discord.Color.red())
+					else:
+						bal = (await self.parent.data.read_user(target_id))['bal']
+						await self.parent.send_message(message, f"{target.name}'s balance is", f"{bal} credit{'' if bal == 1 else 's'}", discord.Color.gold())
 
 				except ValueError:
 					await self.parent.send_message_w_fields(message, "Invalid user", "Use bal [@user]", discord.Color.red(), "Invalid argument @user", "Try mentioning a user")
-					return
 
-			await self.parent.send_message_w_fields(message, "Invalid user", "Use bal [@user]", discord.Color.red(), "Invalid argument @user", "Try mentioning a user")
-			return
+			else:
+				await self.parent.send_message_w_fields(message, "Invalid user", "Use bal [@user]", discord.Color.red(), "Invalid argument @user", "Try mentioning a user")
 
-		bal = self.parent.data.read_user(author.id)["bal"]
-		await self.parent.send_message(message, "Your balance is", f"{bal} credit{'' if bal == 1 else 's'}", discord.Color.gold())
+		else:
+			bal = (await self.parent.data.read_user(author.id))["bal"]
+			await self.parent.send_message(message, "Your balance is", f"{bal} credit{'' if bal == 1 else 's'}", discord.Color.gold())
 
 	def __args__(self) -> str:
 		return "[@user]"
@@ -64,8 +67,8 @@ class Bal(Command):
 class Roll(Command):
 
 	async def __call__(self, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild]) -> None:
-		with self.parent.user_locker.lock(author.id):
-			user_data = self.parent.data.read_user(author.id)
+		async with self.parent.user_locker.lock(author.id):
+			user_data = await self.parent.data.read_user(author.id, True)
 			now = int(time.time())
 
 			if user_data["roll"] + 7200 <= now:
@@ -89,8 +92,12 @@ class Roll(Command):
 				])
 
 				user_data["bal"] += gain
+
+				self.parent.logger.log_gain(author.id, gain, f"roll of {total}")
+
 				user_data["roll"] = now
-				if not self.parent.data.modify_user(author.id, user_data):
+				if not await self.parent.data.modify_user(author.id, user_data, True):
+					self.parent.logger.log_data_failure("users", author.id, user_data)
 					await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
 
 			else:
@@ -102,18 +109,22 @@ class Roll(Command):
 class Daily(Command):
 
 	async def __call__(self, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild]) -> None:
-		with self.parent.user_locker.lock(author.id):
-			user_data = self.parent.data.read_user(author.id)
+		async with self.parent.user_locker.lock(author.id):
+			user_data = await self.parent.data.read_user(author.id, True)
 			today = datetime.datetime.now().strftime("%Y%m%d")
 
 			if today == user_data["daily"]:
 				await self.parent.send_message(message, "You've already claimed you daily", "Try again tomorrow", discord.Color.red())
 			else:
 				user_data["bal"] += 1000
+
+				self.parent.logger.log_gain(author.id, 1000, f"daily on {today}")
+
 				user_data["daily"] = today
 				await self.parent.send_message(message, "Take your daily credits!", f"You now have {user_data['bal']} credits", discord.Color.gold())
 
-				if not self.parent.data.modify_user(author.id, user_data):
+				if not await self.parent.data.modify_user(author.id, user_data, True):
+					self.parent.logger.log_data_failure("users", author.id, user_data)
 					await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
 
 	def __help__(self) -> str:
@@ -209,18 +220,22 @@ class SlotMachine:
 				.add_field(name = "You won!", value = f"You got {win_amount} credit{'' if win_amount == 1 else 's'}"),
 				allowed_mentions = self.parent.command_handler.mentions)
 
-			with self.parent.user_locker.lock(author.id): # Prevent balance from being overritten
-				user_data = self.parent.data.read_user(author.id)
-				user_data["bal"] += win_amount
-				if not self.parent.data.modify_user(author.id, user_data):
-					await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
-			return
+			# Already locked
+			user_data = await self.parent.data.read_user(author.id, True)
+			user_data["bal"] += win_amount
 
-		await self.slot_message.edit(content = None, embed = discord.Embed(title = "Slot Machine", description =
-			f'= :{self.slots[1][0]["emote"]}: :{self.slots[1][1]["emote"]}: :{self.slots[1][2]["emote"]}: =',
-			color = discord.Color.gold()), allowed_mentions = self.parent.command_handler.mentions)
+			self.parent.logger.log_gain(author.id, win_amount, f"slot machine win on {self.slots[1][0]['emote']} with multiplier of {self.slots[1][0]['multiplier']} on a bet of {self.bet}")
 
-	async def roll(self, message: discord.Message):
+			if not await self.parent.data.modify_user(author.id, user_data, True):
+				self.parent.logger.log_data_failure("users", author.id, user_data)
+				await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
+
+		else:
+			await self.slot_message.edit(content = None, embed = discord.Embed(title = "Slot Machine", description =
+				f'= :{self.slots[1][0]["emote"]}: :{self.slots[1][1]["emote"]}: :{self.slots[1][2]["emote"]}: =',
+				color = discord.Color.gold()), allowed_mentions = self.parent.command_handler.mentions)
+
+	async def roll(self, message: discord.Message, fast: bool = False):
 		async def do_a_barrel_roll():
 			await asyncio.sleep(1)
 			self.new_row()
@@ -230,7 +245,8 @@ class SlotMachine:
 		for _ in range(self.slots.__len__() - 3):
 			await do_a_barrel_roll()
 
-		await asyncio.sleep(1)
+		if not fast:
+			await asyncio.sleep(1)
 
 	def __str__(self) -> str:
 		return f'''** **   :{self.slots[2][0]["emote"]}: :{self.slots[2][1]["emote"]}: :{self.slots[2][2]["emote"]}:
@@ -247,32 +263,42 @@ class Slots(Command):
 				bet = int(bet)
 
 			except ValueError:
-				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "Try specifying a positive integer")
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "Try specifying a positive integer")
+				return
 
 			if bet < 0:
-				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be positive")
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be positive")
+				return
 
 			if bet < 20:
-				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be at least 20 credits")
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be at least 20 credits")
+				return
 
 			if bet > 2500:
-				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet cannot be greater than 2500 credits")
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet cannot be greater than 2500 credits")
+				return
 
-			with self.parent.user_locker.lock(author.id): # When doing a balance check, we need to lock user data to prevent a negative balance
-				user_data = self.parent.data.read_user(author.id)
+			async with self.parent.user_locker.lock(author.id): # When doing a balance check, we need to lock user data to prevent a negative balance
+				user_data = await self.parent.data.read_user(author.id, True)
 
 				if user_data["bal"] < bet:
-					return await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "You don't have enough credits to make that bet")
+					await self.parent.send_message_w_fields(message, "Invalid bet", "Use slots <bet>", discord.Color.red(), "Invalid argument bet", "You don't have enough credits to make that bet")
+					return
 
 				user_data["bal"] -= bet
-				if not self.parent.data.modify_user(author.id, user_data):
-					return await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
 
-				machine = SlotMachine(self.parent, bet)
-				await machine.roll(message)
-				return await machine.payout(message, author)
+				self.parent.logger.log_loss(author.id, bet, "slots payment")
 
-		await self.parent.send_message_w_fields(message, "Invalid usage", "Use slots <bet>", discord.Color.red(), "Missing argument", "You need to specify a bet")
+				if not await self.parent.data.modify_user(author.id, user_data, True):
+					self.parent.logger.log_data_failure("users", author.id, user_data)
+					await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
+				else:
+					machine = SlotMachine(self.parent, bet)
+					await machine.roll(message)
+					await machine.payout(message, author)
+
+		else:
+			await self.parent.send_message_w_fields(message, "Invalid usage", "Use slots <bet>", discord.Color.red(), "Missing argument", "You need to specify a bet")
 
 	def __args__(self) -> str:
 		return "<bet>"
@@ -290,32 +316,42 @@ class FastSlots(Command):
 				bet = int(bet)
 
 			except ValueError:
-				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Try specifying a positive whole number")
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Try specifying a positive whole number")
+				return
 
 			if bet < 0:
-				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be positive")
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be positive")
+				return
 
 			if bet < 20:
-				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be at least 20 credits")
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be at least 20 credits")
+				return
 
 			if bet > 2500:
-				return await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet cannot be greater than 2500 credits")
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "Your bet cannot be greater than 2500 credits")
+				return
 
-			with self.parent.user_locker.lock(author.id): # When doing a balance check, we need to lock user data to prevent a negative balance
-				user_data = self.parent.data.read_user(author.id)
+			async with self.parent.user_locker.lock(author.id): # When doing a balance check, we need to lock user data to prevent a negative balance
+				user_data = await self.parent.data.read_user(author.id, True)
 
 				if user_data["bal"] < bet:
-					return await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "You don't have enough credits to make that bet")
+					await self.parent.send_message_w_fields(message, "Invalid bet", "Use fslots <bet>", discord.Color.red(), "Invalid argument bet", "You don't have enough credits to make that bet")
+					return
 
 				user_data["bal"] -= bet
-				if not self.parent.data.modify_user(author.id, user_data):
-					return await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
 
-				machine = SlotMachine(self.parent, bet, 3)
-				await machine.roll(message)
-				return await machine.payout(message, author)
+				self.parent.logger.log_loss(author.id, bet, "fslots payment")
 
-		await self.parent.send_message_w_fields(message, "Invalid usage", "Use fslots <bet>", discord.Color.red(), "Missing argument", "You need to specify a bet")
+				if not await self.parent.data.modify_user(author.id, user_data, True):
+					self.parent.logger.log_data_failure("users", author.id, user_data)
+					await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
+				else:
+					machine = SlotMachine(self.parent, bet, 3)
+					await machine.roll(message, True)
+					await machine.payout(message, author)
+
+		else:
+			await self.parent.send_message_w_fields(message, "Invalid usage", "Use fslots <bet>", discord.Color.red(), "Missing argument", "You need to specify a bet")
 
 	def __args__(self) -> str:
 		return "<bet>"
@@ -327,23 +363,27 @@ class Pay(Command):
 
 	async def __call__(self, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild] = None) -> None:
 		if args.__len__() < 2:
-			return await self.parent.send_message_w_fields(message, "Invalid usage", "Use pay <@user> <amount>", discord.Color.red(), f"Missing argument{'' if args.__len__() == 1 else 's'}", "You need to specify the recipient and the amount of credits to send")
+			await self.parent.send_message_w_fields(message, "Invalid usage", "Use pay <@user> <amount>", discord.Color.red(), f"Missing argument{'' if args.__len__() == 1 else 's'}", "You need to specify the recipient and the amount of credits to send")
+			return
 
 		amount_to_pay = args[1]
 
 		try:
 			amount_to_pay = int(amount_to_pay)
 		except ValueError:
-			return await self.parent.send_message_w_fields(message, "Invalid amount", "Use pay <@user> <amount>", discord.Color.red(), "Invalid argument amount", "Try specifying a positive whole number")
+			await self.parent.send_message_w_fields(message, "Invalid amount", "Use pay <@user> <amount>", discord.Color.red(), "Invalid argument amount", "Try specifying a positive whole number")
+			return
 
 		if amount_to_pay <= 0:
-			return await self.parent.send_message_w_fields(message, "Invalid amount", "Use pay <@user> <amount>", discord.Color.red(), "Invalid argument amount", "The amount must be positive and not zero")
+			await self.parent.send_message_w_fields(message, "Invalid amount", "Use pay <@user> <amount>", discord.Color.red(), "Invalid argument amount", "The amount must be positive and not zero")
+			return
 
-		with self.parent.user_locker.lock(author.id): # Because we're checking the balance, we need to lock data after we check as two payments close to each other can both pass this check and lead to a negative balance
-			sender_data = self.parent.data.read_user(author.id)
+		async with self.parent.user_locker.lock(author.id): # Because we're checking the balance, we need to lock data after we check as two payments close to each other can both pass this check and lead to a negative balance
+			sender_data = await self.parent.data.read_user(author.id, True)
 
 			if sender_data["bal"] < amount_to_pay:
-				return await self.parent.send_message_w_fields(message, "Invalid amount", "Use pay <@user> <amount>", discord.Color.red(), "Invalid argument amount", f"You don't have enought credits to send {amount_to_pay}")
+				await self.parent.send_message_w_fields(message, "Invalid amount", "Use pay <@user> <amount>", discord.Color.red(), "Invalid argument amount", f"You don't have enought credits to send {amount_to_pay}")
+				return
 
 			recipient_id = args[0]
 			if recipient_id.startswith("<@") and recipient_id.endswith(">"):
@@ -355,36 +395,77 @@ class Pay(Command):
 					recipient_id = int(recipient_id)
 
 					if recipient_id == author.id:
-						return await self.parent.send_message(message, "What?", "You can't pay yourself", discord.Color.red())
+						await self.parent.send_message(message, "What? Why?", "You can't pay yourself", discord.Color.red())
+						return
 
-					with self.parent.user_locker.lock(recipient_id):
-						recipient_data = self.parent.data.read_user(recipient_id)
+					recipient: discord.User = self.parent.get_user(recipient_id)
 
-						sender_data["bal"] -= amount_to_pay
-						recipient_data["bal"] += amount_to_pay
+					if recipient is None:
+						await self.parent.send_message(message, "Can't find user", f"Can't find a user by the id {recipient_id}", discord.Color.red())
+						return
 
-						flag1 = not self.parent.data.modify_user(author.id, sender_data)
-						flag2 = not self.parent.data.modify_user(recipient_id, recipient_data)
+					# This check is done and cancels the pay if the recipient has their data lock acquired to prevent deadlock
 
-						if flag1 and flag2:
-							return await self.parent.send_message(message, "Error", "Failed to save both user's data", discord.Color.red(), True)
-						elif flag1:
-							return await self.parent.send_message(message, "Error", "Failed to save sender's data", discord.Color.red(), True)
-						elif flag2:
-							return await self.parent.send_message(message, "Error", "Failed to save recipient's data", discord.Color.red(), True)
+					# User A's Pay locks User A's Lock
+					# User B's Pay locks User B's Lock
+					# User A's Pay wants User B's Lock
+					# User B's Pay wants User A's Lock
+					# Neither can get the lock they want and the two Users' Locks remain locked and cannot unlock
+					# Deadlock!
 
-					return await self.parent.send_message_w_fields(message, "Payment complete", f"{amount_to_pay} credit{'' if amount_to_pay == 1 else 's'} has been sent", discord.Color.gold())
+					if not self.parent.user_locker.locked(recipient_id):
+						async with self.parent.user_locker.lock(recipient_id):
+							recipient_data = await self.parent.data.read_user(recipient_id, True)
+
+							sender_data["bal"] -= amount_to_pay
+							recipient_data["bal"] += amount_to_pay
+
+							self.parent.logger.log_transation(author.id, recipient_id, amount_to_pay)
+
+							flag1 = not await self.parent.data.modify_user(author.id, sender_data, True)
+							flag2 = not await self.parent.data.modify_user(recipient_id, recipient_data, True)
+
+							if flag1:
+								self.parent.logger.log_data_failure("users", author.id, sender_data)
+
+							if flag2:
+								self.parent.logger.log_data_failure("users", recipient_id, recipient_data)
+
+							if flag1 and flag2:
+								await self.parent.send_message(message, "Error", "Failed to save both user's data", discord.Color.red(), True)
+							elif flag1:
+								await self.parent.send_message(message, "Error", "Failed to save sender's data", discord.Color.red(), True)
+							elif flag2:
+								await self.parent.send_message(message, "Error", "Failed to save recipient's data", discord.Color.red(), True)
+							else:
+								await self.parent.send_message_w_fields(message, "Payment complete", f"{amount_to_pay} credit{'' if amount_to_pay == 1 else 's'} has been sent", discord.Color.gold(),
+									"Your new balance", f'{sender_data["bal"]} credit{"" if sender_data["bal"] == 1 else "s"}',
+									f"{recipient.name}'s new balance", f'{recipient_data["bal"]} credit{"" if recipient_data["bal"] == 1 else "s"}')
+					else:
+						await self.parent.send_message(message, "Can't pay user", f"{recipient.name} is running commands that could affect their balance, try paying them later", discord.Color.dark_red(), True)
 
 				except ValueError:
-					return await self.parent.send_message_w_fields(message, "Invalid user", "Use pay <@user> <amount>", discord.Color.red(), "Invalid argument @user", "Try mentioning a user")
+					await self.parent.send_message_w_fields(message, "Invalid user", "Use pay <@user> <amount>", discord.Color.red(), "Invalid argument @user", "Try mentioning a user")
 
-			return await self.parent.send_message_w_fields(message, "Invalid user", "Use pay <@user> <amount>", discord.Color.red(), "Invalid argument @user", "Try mentioning a user")
+			else:
+				await self.parent.send_message_w_fields(message, "Invalid user", "Use pay <@user> <amount>", discord.Color.red(), "Invalid argument @user", "Try mentioning a user")
 
 	def __args__(self) -> str:
 		return "<@user> <amount>"
 
 	def __help__(self) -> str:
 		return "Pay someone credits"
+
+class Flip(Command):
+
+	async def __call__(self, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild] = None) -> None:
+		pass # TODO: Finish
+
+	def __args__(self) -> str:
+		return "<bet>"
+
+	def __help__(self) -> str:
+		return "Flip a coin and get lucky"
 
 class CommandHandler:
 
@@ -399,6 +480,7 @@ class CommandHandler:
 			"slots": Slots(parent),
 			"fslots": FastSlots(parent),
 			"pay": Pay(parent),
+			"flip": Flip(parent),
 			"daily": Daily(parent),
 			"help": Help(parent)
 		}
@@ -422,7 +504,7 @@ class CommandHandler:
 				self._help_fields.append(cmd_name)
 				self._help_fields.append(help_msg)
 
-		self.rate_limit_locks: Dict[int, RLock] = defaultdict(RLock)
+		self.rate_limit_locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 		self.rate_limit: Dict[int, int] = {}
 
 	@property
@@ -430,11 +512,8 @@ class CommandHandler:
 		return int(time.time() + 2)
 
 	async def receive(self, cmd: str, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild] = None) -> None:
-		acquired = False
-		try:
-			acquired = self.rate_limit_locks[author.id].acquire(False)
-
-			if acquired:
+		if not self.rate_limit_locks[author.id].locked():
+			async with self.rate_limit_locks[author.id]:
 				allow = False
 
 				if author.id not in self.rate_limit:
@@ -446,14 +525,12 @@ class CommandHandler:
 				if allow:
 					if cmd in self.cmds:
 						await self.cmds[cmd](args, message, author, guild)
-						return # Don't want to return the output from the command as it's sometimes non-None
+					else:
+						prefix = "g!" if guild is None else (await self.parent.data.read_guild(guild.id))["cmd_prefix"]
+						await self.parent.send_message(message, "Invalid command", f'No command called "{cmd}" exists, try using {prefix}help', discord.Color.red(), True)
 
-					prefix = "g!" if guild is None else self.parent.data.read_guild(guild.id)["cmd_prefix"]
+				else:
+					await self.parent.send_message(message, "Rate Limit", "You're being rate limited, try again in a few seconds", discord.Color.dark_purple(), True)
 
-					await self.parent.send_message(message, "Invalid command", f'No command called "{cmd}" exists, try using {prefix}help', discord.Color.red(), True)
-					return
-
-			await self.parent.send_message(message, "Rate Limit", "You're being rate limited, try again in a few seconds", discord.Color.dark_purple(), True)
-		finally:
-			if acquired:
-				self.rate_limit_locks[author.id].release()
+		else:
+			await self.parent.send_message(message, "Rate Limit", "You're being rate limited, wait for any commands you've ran to finish and try again in a few seconds", discord.Color.dark_purple(), True)

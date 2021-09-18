@@ -1,9 +1,9 @@
 from typing import TypedDict, Dict, Any
 from collections import defaultdict
-from threading import RLock
 from json import dump, load
 import fasteners
 import datetime
+import asyncio
 import gamble
 import time
 import os
@@ -11,15 +11,18 @@ import os
 class Locker:
 
 	def __init__(self):
-		self.data_locks: Dict[int, RLock] = defaultdict(RLock)
+		self.data_locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-	def acquire(self, object_id: int):
-		self.data_locks[object_id].acquire()
+	async def acquire(self, object_id: int) -> bool:
+		return await self.data_locks[object_id].acquire()
+
+	def locked(self, object_id: int) -> bool:
+		return self.data_locks[object_id].locked()
 
 	def release(self, object_id: int):
-		self.data_locks[object_id].release()
+		return self.data_locks[object_id].release()
 
-	def lock(self, object_id: int) -> RLock:
+	def lock(self, object_id: int) -> asyncio.Lock:
 		return self.data_locks[object_id]
 
 class UserDataType(TypedDict):
@@ -54,7 +57,7 @@ class DataHandler:
 		} # Prevent as many reads
 
 	def __modify(self, object_id: int, object_type: str, data: Dict[str, Any]) -> bool:
-		"""A data RLock is assumed to already be acquired"""
+		"""A data `asyncio.Lock` is assumed to already be acquired"""
 		try:
 			object_file = os.path.join(DataHandler._data_root, object_type, f"{object_id}.json")
 
@@ -75,7 +78,7 @@ class DataHandler:
 			return False
 
 	def __read(self, object_id: int, object_type: str) -> Dict[str, Any]:
-		"""A data RLock is assumed to already be acquired"""
+		"""A data `asyncio.Lock` is assumed to already be acquired"""
 		try:
 			object_file = os.path.join(DataHandler._data_root, object_type, f"{object_id}.json")
 
@@ -95,11 +98,16 @@ class DataHandler:
 			return None
 
 	def __exists(self, object_id: int, object_type: str) -> bool:
-		"""A data RLock is assumed to already be acquired"""
+		"""A data `asyncio.Lock` is assumed to already be acquired"""
 		return os.path.isfile(os.path.join(DataHandler._data_root, object_type, f"{object_id}.json"))
 
-	def modify_user(self, user_id: int, data: UserDataType) -> bool:
-		with self.parent.user_locker.lock(user_id):
+	async def modify_user(self, user_id: int, data: UserDataType, already_locked: bool = False) -> bool:
+		acquired = False
+
+		try:
+			if not already_locked:
+				acquired = await self.parent.user_locker.acquire(user_id)
+
 			tmp = self.__modify(user_id, "users", data)
 
 			if tmp:
@@ -107,8 +115,17 @@ class DataHandler:
 
 			return tmp
 
-	def read_user(self, user_id: int) -> UserDataType:
-		with self.parent.user_locker.lock(user_id):
+		finally:
+			if not already_locked and acquired:
+				self.parent.user_locker.release(user_id)
+
+	async def read_user(self, user_id: int, already_locked: bool = False) -> UserDataType:
+		acquired = False
+
+		try:
+			if not already_locked:
+				acquired = await self.parent.user_locker.acquire(user_id)
+
 			if user_id in self._cache["users"]:
 				self._cache["users"][user_id]["last_access"] = int(time.time())
 				return self._cache["users"][user_id]["data"]
@@ -122,8 +139,17 @@ class DataHandler:
 			self._cache["users"][user_id] = Cached(data = default, last_access = int(time.time()))
 			return default
 
-	def modify_guild(self, guild_id: int, data: GuildDataType) -> bool:
-		with self.parent.guild_locker.lock(guild_id):
+		finally:
+			if not already_locked and acquired:
+				self.parent.user_locker.release(user_id)
+
+	async def modify_guild(self, guild_id: int, data: GuildDataType, already_locked: bool = False) -> bool:
+		acquired = False
+
+		try:
+			if not already_locked:
+				acquired = await self.parent.guild_locker.acquire(guild_id)
+
 			tmp = self.__modify(guild_id, "guilds", data)
 
 			if tmp:
@@ -131,8 +157,17 @@ class DataHandler:
 
 			return tmp
 
-	def read_guild(self, guild_id: int) -> GuildDataType:
-		with self.parent.guild_locker.lock(guild_id):
+		finally:
+			if not already_locked and acquired:
+				self.parent.guild_locker.release(guild_id)
+
+	async def read_guild(self, guild_id: int, already_locked: bool = False) -> GuildDataType:
+		acquired = False
+
+		try:
+			if not already_locked:
+				acquired = await self.parent.guild_locker.acquire(guild_id)
+
 			if guild_id in self._cache["guilds"]:
 				self._cache["guilds"][guild_id]["last_access"] = int(time.time())
 				return self._cache["guilds"][guild_id]["data"]
@@ -145,3 +180,7 @@ class DataHandler:
 			default = _default_guild_data()
 			self._cache["guilds"][guild_id] = Cached(data = default, last_access = int(time.time()))
 			return default
+
+		finally:
+			if not already_locked and acquired:
+				self.parent.guild_locker.release(guild_id)
