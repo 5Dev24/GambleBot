@@ -7,7 +7,7 @@ import log
 class GambleBot(discord.Client):
 
 	def __init__(self):
-		super().__init__(intents = discord.Intents(messages = True, members = True, guilds = True))
+		super().__init__(intents = discord.Intents(messages = True, members = True, guilds = True, reactions = True))
 
 		self.user_locker = data.Locker()
 		self.guild_locker = data.Locker()
@@ -49,6 +49,9 @@ class GambleBot(discord.Client):
 		return await triggered_by.reply(embed = discord.Embed(title = title, description = desc, color = color), mention_author = prompt_user)
 
 	async def send_message_w_fields(self, triggered_by: discord.Message, title: str, desc: str, color: discord.Colour, *fields, prompt_user: bool = False) -> discord.Message:
+		return await triggered_by.reply(embed = self.build_embed(title, desc, color, *fields), mention_author = prompt_user)
+
+	def build_embed(self, title: str, desc: str, color: discord.Colour, *fields) -> discord.Embed:
 		embed = discord.Embed(title = title, description = desc, color = color)
 
 		i = 0
@@ -71,7 +74,7 @@ class GambleBot(discord.Client):
 
 			i += 3 if inline else 2
 
-		return await triggered_by.reply(embed = embed, mention_author = prompt_user)
+		return embed
 
 	async def on_message(self, message: discord.Message):
 		content: List[str] = message.content.split(" ")
@@ -89,7 +92,15 @@ class GambleBot(discord.Client):
 
 		cmd = cmd[guild_data["cmd_prefix"].__len__():]
 
-		if not cmd.__len__():
-			return # Empty command
+		if cmd: # Not empty command
+			await self.command_handler.receive(cmd, args, message, message.author, message.guild)
 
-		await self.command_handler.receive(cmd, args, message, message.author, message.guild)
+	async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+		if payload.event_type != "REACTION_ADD":
+			return
+
+		if payload.emoji.name is None:
+			return
+
+		if await self.command_handler.blackjack_manager.is_owned_and_active_game(payload.message_id, payload.user_id):
+			await self.command_handler.blackjack_manager.update(payload.message_id, payload.emoji.__str__())

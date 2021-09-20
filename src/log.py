@@ -18,7 +18,7 @@ class LogHandler:
 		self.gains_log = os.path.join(LogHandler._log_root, "gains.log")
 		self.losses_log = os.path.join(LogHandler._log_root, "losses.log")
 
-	def __write(self, to_what: str, what: str):
+	def __write(self, to_what: str, what: str): # Future updates should make this a queue system
 		acquired = False
 
 		write_lock = fasteners.InterProcessReaderWriterLock(to_what)
@@ -33,9 +33,9 @@ class LogHandler:
 			if acquired:
 				write_lock.release_write_lock()
 
-	def log_data_failure(self, object_type: str, object_id: int, object_data: Dict):
-		self.__write(self.master_log, f"[F] {object_type}>{object_id} {dumps(object_data, separators = (',', ':'))}")
-		self.__write(self.data_log, f"{object_type}>{object_id} {dumps(object_data, separators = (',', ':'))}")
+	def log_data_failure(self, object_type: str, object_id: int, source: str, object_data: Dict):
+		self.__write(self.master_log, f"[F] {object_type}>{object_id}, {source} couldn't save {dumps(object_data, separators = (',', ':'))}")
+		self.__write(self.data_log, f"{object_type}>{object_id}, {source} couldn't save {dumps(object_data, separators = (',', ':'))}")
 
 	def log_transation(self, from_id: int, to_id: int, amount: int):
 		self.__write(self.master_log, f"[T] {amount} credit{'' if amount.__abs__() == 1 else 's'} from {from_id} to {to_id}")

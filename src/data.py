@@ -28,11 +28,10 @@ class Locker:
 class UserDataType(TypedDict):
 	bal: int
 	roll: int
-	blackjack: int
 	daily: str
 
 def _default_user_data() -> UserDataType:
-	return UserDataType(bal = 0, roll = 0, blackjack = 0, daily = (datetime.datetime.now() - datetime.timedelta(days = 1)).strftime("%Y%m%d"))
+	return UserDataType(bal = 0, roll = 0, daily = (datetime.datetime.now() - datetime.timedelta(days = 1)).strftime("%Y%m%d"))
 
 class GuildDataType(TypedDict):
 	cmd_channel: int

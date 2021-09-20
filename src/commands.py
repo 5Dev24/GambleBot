@@ -1,11 +1,13 @@
-from typing import TypedDict, Optional, Tuple, Dict, List
+from typing import Optional, Dict, List
 from collections import defaultdict
+import blackjack
 import datetime
 import discord
 import asyncio
 import random
 import gamble
 import random
+import slots
 import time
 
 class Command:
@@ -97,7 +99,7 @@ class Roll(Command):
 
 				user_data["roll"] = now
 				if not await self.parent.data.modify_user(author.id, user_data, True):
-					self.parent.logger.log_data_failure("users", author.id, user_data)
+					self.parent.logger.log_data_failure("users", author.id, "roll", user_data)
 					await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
 
 			else:
@@ -124,11 +126,11 @@ class Daily(Command):
 				await self.parent.send_message(message, "Take your daily credits!", f"You now have {user_data['bal']} credits", discord.Color.gold())
 
 				if not await self.parent.data.modify_user(author.id, user_data, True):
-					self.parent.logger.log_data_failure("users", author.id, user_data)
+					self.parent.logger.log_data_failure("users", author.id, "daily", user_data)
 					await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
 
 	def __help__(self) -> str:
-		return "Collect 1000 tokens daily"
+		return "Collect 1000 credits daily"
 
 class Help(Command):
 
@@ -137,121 +139,6 @@ class Help(Command):
 
 	def __help__(self) -> str:
 		return "See all help messages"
-
-class SlotElement(TypedDict):
-	emote: str
-	chance: float
-	multiplier: float
-
-class SlotsManager:
-
-	def __init__(self):
-		self.apple: SlotElement       = {"emote": "apple",       "chance": .70,  "multiplier": 0.5 }
-		self.green_apple: SlotElement = {"emote": "green_apple", "chance": .60,  "multiplier": 0.75}
-		self.tangerine: SlotElement   = {"emote": "tangerine",   "chance": .50,  "multiplier": 1   }
-		self.pear: SlotElement        = {"emote": "pear",        "chance": .45,  "multiplier": 1.25}
-		self.lemon: SlotElement       = {"emote": "lemon",       "chance": .35,  "multiplier": 1.75}
-		self.melon: SlotElement       = {"emote": "melon",       "chance": .30,  "multiplier": 2.5 }
-		self.strawberry: SlotElement  = {"emote": "strawberry",  "chance": .20,  "multiplier": 3   }
-		self.peach: SlotElement       = {"emote": "peach",       "chance": .15,  "multiplier": 4   }
-		self.kiwi: SlotElement        = {"emote": "kiwi",        "chance": .10,  "multiplier": 4.5 }
-		self.blueberry: SlotElement   = {"emote": "blueberries", "chance": .10,  "multiplier": 5   }
-		self.grapes: SlotElement      = {"emote": "grapes",      "chance": .05,  "multiplier": 8   }
-		self.cherry: SlotElement      = {"emote": "cherries",    "chance": .025, "multiplier": 10  }
-
-		self.slots: Tuple[SlotElement] = (
-			self.apple,
-			self.green_apple,
-			self.tangerine,
-			self.pear,
-			self.lemon,
-			self.melon,
-			self.strawberry,
-			self.peach,
-			self.kiwi,
-			self.blueberry,
-			self.grapes,
-			self.cherry
-		)
-
-		total_chance = sum([slot["chance"] for slot in self.slots])
-		for slot in self.slots:
-			slot["chance"] = slot["chance"] / total_chance
-
-		self.weights = tuple([slot["chance"] for slot in self.slots])
-
-	def random_slot(self):
-		return random.choices(self.slots, self.weights)[0]
-
-class SlotMachine:
-
-	def __init__(self, parent: "gamble.GambleBot", bet: int, rows: int = 10):
-		self.parent = parent
-		self.slots: List[List[SlotElement]] = []
-		self.slot_message: discord.Message = None
-		self.win = random.random() < .6 # 60% chance to win
-		self.bet = bet
-
-		rows = rows if 3 <= rows <= 15 else 10
-		for row in range(rows):
-			if self.win and row == rows - 2:
-				self.slots.append([parent.command_handler.slots_manager.random_slot()] * 3)
-				continue
-
-			slots = [parent.command_handler.slots_manager.random_slot(), parent.command_handler.slots_manager.random_slot(), parent.command_handler.slots_manager.random_slot()]
-
-			while slots[0]["emote"] == slots[1]["emote"] == slots[2]["emote"]:
-				slots = [parent.command_handler.slots_manager.random_slot(), parent.command_handler.slots_manager.random_slot(), parent.command_handler.slots_manager.random_slot()]
-
-			self.slots.append(slots)
-
-	def new_row(self):
-		for i in range(self.slots.__len__() - 1):
-			self.slots[i] = self.slots[i + 1]
-
-		del self.slots[i + 1]
-
-	async def payout(self, message: discord.Message, author: discord.User):
-		if self.slots[1][0]["emote"] == self.slots[1][1]["emote"] == self.slots[1][2]["emote"]:
-			win_amount = int(self.bet * (1 + self.slots[1][0]["multiplier"]))
-
-			await self.slot_message.edit(content = None, embed = discord.Embed(title = "Slot Machine", description = 
-				f'**=** :{self.slots[1][0]["emote"]}: :{self.slots[1][1]["emote"]}: :{self.slots[1][2]["emote"]}: **=**', color = discord.Color.gold())
-				.add_field(name = "You won!", value = f"You got {win_amount} credit{'' if win_amount == 1 else 's'}"),
-				allowed_mentions = self.parent.command_handler.mentions)
-
-			# Already locked
-			user_data = await self.parent.data.read_user(author.id, True)
-			user_data["bal"] += win_amount
-
-			self.parent.logger.log_gain(author.id, win_amount, f"slot machine win on {self.slots[1][0]['emote']} with multiplier of {self.slots[1][0]['multiplier']} on a bet of {self.bet}")
-
-			if not await self.parent.data.modify_user(author.id, user_data, True):
-				self.parent.logger.log_data_failure("users", author.id, user_data)
-				await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
-
-		else:
-			await self.slot_message.edit(content = None, embed = discord.Embed(title = "Slot Machine", description =
-				f'= :{self.slots[1][0]["emote"]}: :{self.slots[1][1]["emote"]}: :{self.slots[1][2]["emote"]}: =',
-				color = discord.Color.gold()), allowed_mentions = self.parent.command_handler.mentions)
-
-	async def roll(self, message: discord.Message, fast: bool = False):
-		async def do_a_barrel_roll():
-			await asyncio.sleep(1)
-			self.new_row()
-			await self.slot_message.edit(content = self.__str__(), allowed_mentions = self.parent.command_handler.mentions)
-
-		self.slot_message = await self.parent.send_raw_message(message, self.__str__())
-		for _ in range(self.slots.__len__() - 3):
-			await do_a_barrel_roll()
-
-		if not fast:
-			await asyncio.sleep(1)
-
-	def __str__(self) -> str:
-		return f'''** **   :{self.slots[2][0]["emote"]}: :{self.slots[2][1]["emote"]}: :{self.slots[2][2]["emote"]}:
-{"**=**" if self.win else "="} :{self.slots[1][0]["emote"]}: :{self.slots[1][1]["emote"]}: :{self.slots[1][2]["emote"]}: {"**=**" if self.win else "="}
-    :{self.slots[0][0]["emote"]}: :{self.slots[0][1]["emote"]}: :{self.slots[0][2]["emote"]}:'''
 
 class Slots(Command):
 
@@ -290,10 +177,10 @@ class Slots(Command):
 				self.parent.logger.log_loss(author.id, bet, "slots payment")
 
 				if not await self.parent.data.modify_user(author.id, user_data, True):
-					self.parent.logger.log_data_failure("users", author.id, user_data)
+					self.parent.logger.log_data_failure("users", author.id, "slots", user_data)
 					await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
 				else:
-					machine = SlotMachine(self.parent, bet)
+					machine = slots.Machine(self.parent, bet)
 					await machine.roll(message)
 					await machine.payout(message, author)
 
@@ -343,10 +230,10 @@ class FastSlots(Command):
 				self.parent.logger.log_loss(author.id, bet, "fslots payment")
 
 				if not await self.parent.data.modify_user(author.id, user_data, True):
-					self.parent.logger.log_data_failure("users", author.id, user_data)
+					self.parent.logger.log_data_failure("users", author.id, "fslots", user_data)
 					await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
 				else:
-					machine = SlotMachine(self.parent, bet, 3)
+					machine = slots.Machine(self.parent, bet, 3)
 					await machine.roll(message, True)
 					await machine.payout(message, author)
 
@@ -426,10 +313,10 @@ class Pay(Command):
 							flag2 = not await self.parent.data.modify_user(recipient_id, recipient_data, True)
 
 							if flag1:
-								self.parent.logger.log_data_failure("users", author.id, sender_data)
+								self.parent.logger.log_data_failure("users", author.id, "pay sender", sender_data)
 
 							if flag2:
-								self.parent.logger.log_data_failure("users", recipient_id, recipient_data)
+								self.parent.logger.log_data_failure("users", recipient_id, "pay recipient", recipient_data)
 
 							if flag1 and flag2:
 								await self.parent.send_message(message, "Error", "Failed to save both user's data", discord.Color.red(), True)
@@ -459,20 +346,153 @@ class Pay(Command):
 class Flip(Command):
 
 	async def __call__(self, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild] = None) -> None:
-		pass # TODO: Finish
+		if args.__len__():
+			bet = args[0]
+
+			try:
+				bet = int(bet)
+
+			except ValueError:
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use flip <bet>", discord.Color.red(), "Invalid argument bet", "Try specifying a positive integer")
+				return
+
+			if bet < 0:
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use flip <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be positive")
+				return
+
+			if bet < 100:
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use flip <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be at least 100 credits")
+				return
+
+			if bet > 1000:
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use flip <bet>", discord.Color.red(), "Invalid argument bet", "Your bet cannot be greater than 1000 credits")
+				return
+
+			async with self.parent.user_locker.lock(author.id):
+				user_data = await self.parent.data.read_user(author.id, True)
+
+				if user_data["bal"] < bet:
+					await self.parent.send_message_w_fields(message, "Invalid bet", "Use flip <bet>", discord.Color.red(), "Invalid argument bet", "You don't have enough credits to make that bet")
+					return
+
+				if random.randint(0, 1): # Actual 50/50
+					self.parent.logger.log_gain(author.id, bet, "flip")
+					user_data["bal"] += bet
+					await self.parent.send_message(message, "Heads!", f"Here's your {bet} credit{'' if bet == 1 else 's'}", discord.Color.gold())
+				else:
+					self.parent.logger.log_loss(author.id, bet, "flip")
+					user_data["bal"] -= bet
+					await self.parent.send_message(message, "Tails!", "Better luck next time", discord.Color.gold())
+
+				if not await self.parent.data.modify_user(author.id, user_data, True):
+					self.parent.logger.log_data_failure("users", author.id, "flip", user_data)
+					await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
+
+		else:
+			await self.parent.send_message_w_fields(message, "Invalid usage", "Use flip <bet>", discord.Color.red(), "Missing argument", "You need to specify a bet")
 
 	def __args__(self) -> str:
 		return "<bet>"
 
 	def __help__(self) -> str:
-		return "Flip a coin and get lucky"
+		return "Flip a coin and hope it lands on heads"
+
+class Odds(Command):
+
+	async def __call__(self, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild] = None) -> None:
+		if args.__len__():
+			cmd = args[0].lower()
+
+			if cmd == "roll":
+				await self.parent.send_message_w_fields(message, "Roll odds", "Below are the chances for getting any roll", discord.Color.gold(),
+					"3 or 18", "`0.463%`", "4 or 17", "`1.389%`", "5 or 16", "`2.778%`", "6 or 15", "`4.630%`", "7 or 14", "`6.944%`", "8 or 13", "`9.722%`", "9 or 12", "`11.574%`", "10 or 11", "`12.500%`")
+
+			elif cmd == "slots" or cmd == "fslots":
+				await self.parent.send_message_w_fields(message, f"{cmd.title()} odds", "Below are the chances for rolling any fruit", discord.Color.gold(),
+					"Your chances of winning are 60%", "Then a random fruit is selected based off this table, format:", "Fruit", "`multiplier` @ `chance`",
+					"Apple", "`0.5` @ `19.858%`", True, "Green Apple", "`0.75` @ `17.021%`", True, "Tangerine", "`1` @ `14.184%`", True, "Pear", "`1.25` @ `12.766%`", True, "Lemon", "`1.75` @ `9.929%`", True,
+					"Melon", "`2.5` @ `8.511%`", True, "Strawberry", "`3` @ `5.674%`", True, "Peach", "`4` @ `4.255%`", True, "Kiwi", "`4.5` @ `2.837%`", True, "Blueberry", "`5` @ `2.837%`", True,
+					"Grapes", "`8` @ `1.418%`", True, "Cherry", "`10` @ `0.709%`", True)
+
+			elif cmd == "flip":
+				await self.parent.send_message_w_fields(message, "Flip odds", "Well, the odds are quite simple", discord.Color.gold(),
+					"Heads (win)", "50%", "Tails (loss)", "50%")
+
+			else:
+				await self.parent.send_message_w_fields(message, "Invalid usage", "Use odds <cmd>", discord.Color.red(), "Invalid argument <cmd>", "You can only specify roll, slots, fslots, or flip")
+
+		else:
+			await self.parent.send_message_w_fields(message, "Invalid usage", "Use odds <cmd>", discord.Color.red(), "Missing argument", "You need to specify a command")
+
+	def __args__(self) -> str:
+		return "<cmd>"
+
+	def __help__(self) -> str:
+		return "Find out the odds of certain games"
+
+class Blackjack(Command):
+
+	async def __call__(self, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild] = None) -> None:
+		if guild is None: # In DMs
+			await self.parent.send_message_w_fields(message, "Invalid playing place", "Use blackjack <bet> in a server", discord.Color.red(),
+				"Blackjack can only be played in servers", "This is because Gamble needs to be able to clear reactions for the game to work")
+			return
+
+		if args.__len__():
+			bet = args[0]
+
+			try:
+				bet = int(bet)
+
+			except ValueError:
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use blackjack <bet>", discord.Color.red(), "Invalid argument bet", "Try specifying a positive integer")
+				return
+
+			if bet < 0:
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use blackjack <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be positive")
+				return
+
+			if bet < 50:
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use blackjack <bet>", discord.Color.red(), "Invalid argument bet", "Your bet must be at least 50 credits")
+				return
+
+			if bet > 5000:
+				await self.parent.send_message_w_fields(message, "Invalid bet", "Use blackjack <bet>", discord.Color.red(), "Invalid argument bet", "Your bet cannot be greater than 5000 credits")
+				return
+
+			async with self.parent.user_locker.lock(author.id):
+				user_data = await self.parent.data.read_user(author.id, True)
+
+				if user_data["bal"] < bet:
+					await self.parent.send_message_w_fields(message, "Invalid bet", "Use blackjack <bet>", discord.Color.red(), "Invalid argument bet", "You don't have enough credits to make that bet")
+					return
+
+				self.parent.logger.log_loss(author.id, bet, "blackjack payment")
+				user_data["bal"] -= bet
+
+				if not await self.parent.data.modify_user(author.id, user_data, True):
+					self.parent.logger.log_data_failure("users", author.id, "blackjack", user_data)
+					await self.parent.send_message(message, "Error", "Failed to save user data", discord.Color.red(), True)
+				else:
+					await self.parent.command_handler.blackjack_manager.start_game(message, bet)
+
+		else:
+			await self.parent.send_message_w_fields(message, "Invalid usage", "Use blackjack <bet>", discord.Color.red(), "Missing argument", "You need to specify a bet")
+
+	def __args__(self) -> str:
+		return "<bet>"
+
+	def __help__(self) -> str:
+		return "Play a game of blackjack"
 
 class CommandHandler:
 
 	def __init__(self, parent: "gamble.GambleBot"):
 		self.parent = parent
-		self.slots_manager = SlotsManager()
 		self.mentions = discord.AllowedMentions(replied_user = False)
+
+		self.slots_manager = slots.Manager()
+		self.blackjack_manager = blackjack.Manager(parent)
 
 		self.cmds: Dict[str, Command] = {
 			"bal": Bal(parent),
@@ -482,6 +502,8 @@ class CommandHandler:
 			"pay": Pay(parent),
 			"flip": Flip(parent),
 			"daily": Daily(parent),
+			"blackjack": Blackjack(parent),
+			"odds": Odds(parent),
 			"help": Help(parent)
 		}
 
