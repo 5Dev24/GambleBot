@@ -46,7 +46,7 @@ python3 ./src/__main__.py
 
 ## Running the bot as a systemd service (on startup)
 
-Put this unit file in `/lib/systemd/system/GambleBot.service`
+`/lib/systemd/system/GambleBot.service`
 ```
 [Unit]
 Description=GambleBot
@@ -63,6 +63,9 @@ RestartSec=3s
 WantedBy=multi-user.target
 ```
 
+<br>
+
+Then run these to enable it after adding the file to systemd
 ```bash
 sudo systemctl enable GambleBot.service
 sudo systemctl daemon-reload
