@@ -485,6 +485,114 @@ class Blackjack(Command):
 	def __help__(self) -> str:
 		return "Play a game of blackjack"
 
+class Prefix(Command):
+
+	async def __call__(self, args: List[str], message: discord.Message, author: discord.Member, guild: Optional[discord.Guild] = None) -> None:
+		if guild is None:
+			await self.parent.send_message_w_fields(message, "Invalid location", "Use prefix <prefix> in a server", discord.Color.red(),
+				"Prefix can only be ran in servers", "This is because Gamble needs to be able to know which server it's modifying and to check for permissions")
+			return
+
+		perms: discord.Permissions = message.channel.permissions_for(author)
+		if perms.administrator or perms.manage_channels:
+			if args.__len__():
+				prefix = args[0]
+
+				if not prefix.endswith("!"):
+					await self.parent.send_message_w_fields(message, "Invalid prefix", 'A prefix must end with "!"', discord.Color.red(), "EX:", "g!, gamble!, pog!")
+					return
+
+				if prefix.__len__() < 2:
+					await self.parent.send_message_w_fields(message, "Invalid prefix", 'The prefix must have more than just the "!"', discord.Color.red(), "EX:", "g!, gamble!, pog!")
+					return
+
+				if not prefix[:-1].isalpha():
+					await self.parent.send_message_w_fields(message, "Invalid prefix", "The prefix can only be made of letters", discord.Color.red(), "EX:", "g!, gamble!, pog!")
+					return
+
+				async with self.parent.guild_locker.lock(guild.id):
+					guild_data = await self.parent.data.read_guild(guild.id, True)
+					guild_data["cmd_prefix"] = prefix.lower()
+
+					if not await self.parent.data.modify_guild(guild.id, guild_data, True):
+						self.parent.logger.log_data_failure("guilds", guild.id, "prefix change", guild_data)
+						await self.parent.send_message(message, "Error", "Failed to save guild data", discord.Color.red(), True)
+					else:
+						await self.parent.send_message(message, "Server prefix has been changed", f'It is now "{prefix.lower()}"', discord.Color.gold())
+
+			else:
+				await self.parent.send_message_w_fields(message, "Invalid usage", "Use prefix <prefix>", discord.Color.red(), "Missing argument", "You need to specify a prefix")
+
+		else:
+			await self.parent.send_message_w_fields(message, "Invalid permissions", "You don't have required permissions to run this command", discord.Color.red(),
+				"Try finding someone with permission to use this command", "You'll need either Administrator or Manage Channels")
+
+	def __args__(self) -> str:
+		return "<prefix>"
+
+	def __help__(self) -> str:
+		return "Change the server's prefix"
+
+class Channel(Command):
+
+	async def __call__(self, args: List[str], message: discord.Message, author: discord.User, guild: Optional[discord.Guild] = None) -> None:
+		if guild is None:
+			await self.parent.send_message_w_fields(message, "Invalid location", "Use channel <channel> in a server", discord.Color.red(),
+				"Channel can only be ran in servers", "This is because Gamble needs to be able to know which server it's modifying and to check for permissions")
+			return
+
+		perms: discord.Permissions = message.channel.permissions_for(author)
+		if perms.administrator or perms.manage_channels:
+			if args.__len__():
+				target_id = args[0]
+				if target_id == "reset": # Reset to -1
+					async with self.parent.guild_locker.lock(guild.id):
+						guild_data = await self.parent.data.read_guild(guild.id, True)
+						guild_data["cmd_channel"] = -1
+
+						if not await self.parent.data.modify_guild(guild.id, guild_data, True):
+							self.parent.logger.log_data_failure("guilds", guild.id, "channel reset", guild_data)
+							await self.parent.send_message(message, "Error", "Failed to save guild data", discord.Color.red(), True)
+						else:
+							await self.parent.send_message(message, "Server command channel has been reset", "Commands can now be ran anywhere", discord.Color.gold())
+
+				elif target_id.startswith("<#") and target_id.endswith(">"): # A specific channel
+					target_id = target_id[2:-1]
+
+					try:
+						target_id = int(target_id)
+						channel: discord.TextChannel = self.parent.get_channel(target_id)
+
+						if channel is None or channel.guild.id != guild.id:
+							await self.parent.send_message(message, "Can't find channel", f"Can't find a channel by the id {target_id}", discord.Color.red())
+						else:
+							async with self.parent.guild_locker.lock(guild.id):
+								guild_data = await self.parent.data.read_guild(guild.id, True)
+								guild_data["cmd_channel"] = channel.id
+
+								if not await self.parent.data.modify_guild(guild.id, guild_data, True):
+									self.parent.logger.log_data_failure("guilds", guild.id, "channel change", guild_data)
+									await self.parent.send_message(message, "Error", "Failed to save guild data", discord.Color.red(), True)
+								else:
+									await self.parent.send_message(message, "Server command channel has been changed", f'It is now <#{channel.id}>', discord.Color.gold())
+
+					except ValueError:
+						await self.parent.send_message_w_fields(message, "Invalid channel", "Use channel <#channel>", discord.Color.red(), "Invalid argument #channel", "Try mentioning a channel")
+				else:
+					await self.parent.send_message_w_fields(message, "Invalid channel", "Use channel <#channel/reset>", discord.Color.red(), "Invalid argument #channel", "Try mentioning a channel or reset")
+			else:
+				await self.parent.send_message_w_fields(message, "Invalid usage", "Use channel <#channel/reset>", discord.Color.red(), "Missing argument", "You need to specify a channel or reset")
+
+		else:
+			await self.parent.send_message_w_fields(message, "Invalid permissions", "You don't have required permissions to run this command", discord.Color.red(),
+				"Try finding someone with permission to use this command", "You'll need either Administrator or Manage Channels")
+
+	def __args__(self) -> str:
+		return "<#channel/reset>"
+
+	def __help__(self) -> str:
+		return "Change the server's command channel"
+
 class CommandHandler:
 
 	def __init__(self, parent: "gamble.GambleBot"):
@@ -504,6 +612,8 @@ class CommandHandler:
 			"daily": Daily(parent),
 			"blackjack": Blackjack(parent),
 			"odds": Odds(parent),
+			"prefix": Prefix(parent),
+			"channel": Channel(parent),
 			"help": Help(parent)
 		}
 
