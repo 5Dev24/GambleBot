@@ -16,7 +16,7 @@ cd /opt/GambleBot/
 
 python3 -m venv ./venv/
 
-source ./venv/bin/active
+source ./venv/bin/activate
 
 pip3 install -r ./requirements.txt
 ```
@@ -37,7 +37,7 @@ echo "ClientSecret=TOKEN" > ./src/.env
 ```bash
 cd /opt/GambleBot/
 
-source ./venv/bin/active
+source ./venv/bin/activate
 
 python3 ./src/__main__.py
 ```
