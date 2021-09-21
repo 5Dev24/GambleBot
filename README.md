@@ -26,8 +26,6 @@ pip3 install -r ./requirements.txt
 ## How to setup
 
 ```bash
-python3 ./src/__main__.py
-
 # Replace "TOKEN" with your bot's secret token
 echo "ClientSecret=TOKEN" > ./src/.env
 ```
